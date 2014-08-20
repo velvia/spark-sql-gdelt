@@ -2,9 +2,19 @@ spark-sql-gdelt
 ===============
 
 Scripts and code to import the GDELT dataset into Spark SQL for analysis.
-Based upon the original [GDELT Spark blog post](http://chrismeserole.com/signals/shark-spark-gdelt-tutorial/).
+Based upon the original [GDELT Spark blog post](http://chrismeserole.com/signals/shark-spark-gdelt-tutorial/).  Also contains a quick and dirty CSV importer (this will exist in Spark 1.2)
 
 This experiment is based on Spark 1.0.2 and AWS, but can be easily adapted for other environments.  When running in AWS, it is much faster to download and upload the raw GDELT files from AWS itself, don't try it on your own laptop.
+
+## Quick Start
+
+    // convert each CSV line to JSON, use jsonRDD
+    val gdelt = sc.textFile(.....).map(GdeltImporter.parseGDeltRow)
+    gdelt.registerAsTable("gdelt")
+
+    // Alternative, parses each line as case classes.  Warning: very slow!
+    val gdelt = sc.textFile(.....).map(GdeltImporter.parseGDeltAsJson)
+    sqlContext.jsonRDD(gdelt).registerAsTable("gdelt")
 
 ## Importing Data into Spark SQL
 
@@ -19,31 +29,65 @@ There are multiple ways of [importing data](http://spark.apache.org/docs/latest/
 * **Parquet** - being column oriented with compression, Parquet files should be smaller than CSV and load faster into Spark too. Converting CSV to Parquet is nontrivial though.
 
 * **case classes** - This is the approach this tutorial takes, because we could then directly load CSV files into Spark and parse them into case classes.  The disadvantage is that this code only works for the GDELT dataset.
+    - UPDATE: Turns out this is *HORRIBLY* slow in Spark 1.0.2.  Thus the tutorial is now taking the approach of reading in each raw CSV line and converting it to JSON using `parseGDeltAsJson`, then using `jsonRDD`.
 
 ## Walk Through
 
 1. Run `gdelt_importer.sh` to download and unzip the GDELT raw CSV files
-2. Upload the CSV files to S3.  You can use `s3put` as described in the original Chris Meserole blog post.
-3. Compile a jar of this repo using `sbt package`, then push the jar to your Spark cluster.
+
+1. Upload the CSV files to S3.  You can use `s3put` as described in the original Chris Meserole blog post.
+
+1. Compile a jar of this repo using `sbt package`, then push the jar to your Spark cluster.
     - For EC2 deployed using Spark's built in scripts, the easiest is to `scp -i <aws_pem_file> target/scala-2.10/spark-sql-gdelt*.jar <your-aws-hostname>:/root/spark/lib`
     - Then, as root in `/root` dir, do `spark-ec2/copy-dir.sh spark/lib`
     - Finally, add this line to `spark/conf/spark-env.sh`: `export SPARK_CLASSPATH="/root/spark/lib/spark-sql-gdelt_2.10-0.1-SNAPSHOT.jar"` (add it above the SPARK_SUBMIT_LIBRARY_PATH export)
     - `spark-ec2/copy-dir.sh spark/conf`
-3. Start `spark-shell` pointing to your cluster.  It's easier if you start it from the master node itself.
+
+1. Start `spark-shell` pointing to your cluster.  It's easier if you start it from the master node itself.
     - Verify our jar is available by typing `GdeltImporter` and see if the object can be discovered
-4. Create a `SQLContext`.
+
+1. Create a `SQLContext`.
 
         val sqlContext = new org.apache.spark.sql.SQLContext(sc)
 
-5. Do an import so an `RDD[GDeltRow]` can be implicitly converted to an `SchemaRDD`.
+1. Map the input files and transform them.  This is lazy.  It will eventually create a JSON string for every record.
+
+        val gdelt = sc.textFile("s3n://YOUR_BUCKET/gdelt_csv/").map(GdeltImporter.parseGDeltAsJson)
+
+1. Now let's convert the `RDD[String]` to a `SchemaRDD`, register it as a table and run some SQL on it!
+
+        sqlContext.jsonRDD(gdelt).registerAsTable("gdelt")
+        sqlContext.sql("SELECT count(*) FROM gdelt").collect
+
+    - This step will take a while.  The first line is when Spark does the actual work of the `parseGDeltAsJson`, CSV reading and converting the JSON lines into `SchemaRDD` records.  Second step does the caching (see below).
+
+The column names used should be the same as GDELT documentation.
+
+### Caching the Data
+
+So far, the data has been read into heap by Spark but it is not cached between queries.  This means that Spark may go all the way back to the data source - say S3 - for each query!   To keep the computation entirely in memory, we need to cache the dataset in memory:
+
+    sqlContext.cacheTable("gdelt")
+
+Now, the table will be cached on the next execution and subsequent queries will run out of the cache.  The cache stores the data in an efficient columnar format and will use compression if enabled.
+
+Compression seems to help significantly (5x savings when I tried it -- at least compared to uncompressed case classes, which might not be a fair comparison).  To enable it, add this line to your `conf/spark-defaults.conf`:
+
+    spark.sql.inMemoryColumnarStorage.compressed true
+
+### Case Class instructions (Very Slow)
+
+NOTE: This may appear to hang, but don't give up.  For GDELT data 1979-1984, it took an HOUR to do the final step on an 8 x c3.xlarge setup in AWS.
+
+1. Do an import so an `RDD[GDeltRow]` can be implicitly converted to an `SchemaRDD`.
 
         import sqlContext.createSchemaRDD
 
-6. Map the input files and transform them.  This is lazy.  It creates a case class for every record.
+1. Map the input files and transform them.  This is lazy.  It creates a case class for every record.
 
         val gdelt = sc.textFile("s3n://YOUR_BUCKET/gdelt_csv/").map(GdeltImporter.parseGDeltRow)
 
-7. Read the first 3 records and verify the records are what we expect.
+1. Read the first 3 records and verify the records are what we expect.
 
         gdelt.take(3).foreach(println)
 
@@ -53,7 +97,7 @@ There are multiple ways of [importing data](http://spark.apache.org/docs/latest/
             GDeltRow(1,19790101,197901,1979,1979.0027,ActorInfo(,,,,,,,,,),ActorInfo(AGR,FARMER,,,,,,AGR,,),1,030,030,03,1,4.0,10,1,10,10.979228,GeoInfo(0,,,,0.0,0.0,0),GeoInfo(1,Nigeria,NI,NI,10.0,8.0,0),GeoInfo(1,Nigeria,NI,NI,10.0,8.0,0),20130203)
             GDeltRow(2,19790101,197901,1979,1979.0027,ActorInfo(,,,,,,,,,),ActorInfo(AGR,FARMER,,,,,,AGR,,),1,100,100,10,3,-5.0,10,1,10,10.979228,GeoInfo(0,,,,0.0,0.0,0),GeoInfo(1,Nigeria,NI,NI,10.0,8.0,0),GeoInfo(1,Nigeria,NI,NI,10.0,8.0,0),20130203)
 
-8. Now let's register the RDD[GdeltRow] as a table and run some SQL on it!
+1. Now let's register the RDD[GdeltRow] as a table and run some SQL on it!
 
         gdelt.registerAsTable("gdelt")
         sqlContext.sql("SELECT count(*) FROM gdelt").collect
@@ -64,11 +108,3 @@ classes (as of 2.10) only support 22 fields, and we want to represent the
 structure, we use nested case classes.
 
 Access nested fields using a dot notation, for example, `Actor2.Name`.  To see a schema of all the fields, do `gdelt.printSchema`.
-
-## Caching the Data
-
-So far, the data has been read into heap by Spark but it is not cached between queries.  This means that Spark may go all the way back to the data source - say S3 - for each query!   To keep the computation entirely in memory, we need to cache the dataset in memory:
-
-    sqlContext.cacheTable("gdelt")
-
-Now, the table will be cached on the next execution and subsequent queries will run out of the cache.  The cache stores the data in an efficient columnar format and will use compression if enabled.

@@ -18,6 +18,18 @@ case class GDeltRow(EventId: Int, Day: Int, MonthYear: Int, Year: Int, FractionD
                     AvgTone: Float,
                     Actor1Geo: GeoInfo, Actor2Geo: GeoInfo, ActionGeo: GeoInfo, DateAdded: String)
 
+/**
+ * Functions for converting GDELT raw file lines to either the [[GDeltRow]] case class or a JSON string.
+ * {{{
+ *   // convert each CSV line to JSON, use jsonRDD
+ *   val gdelt = sc.textFile(.....).map(GdeltImporter.parseGDeltAsJson)
+ *   sqlContext.jsonRDD(gdelt).registerAsTable("gdelt")
+ *
+ *   // Alternative, parses each line as case classes.  Warning: very slow!
+ *   val gdelt = sc.textFile(.....).map(GdeltImporter.parseGDeltRow)
+ *   gdelt.registerAsTable("gdelt")
+ * }}}
+ */
 object GdeltImporter {
   def time[A](f: => A): A = {
     val start = System.currentTimeMillis
@@ -71,4 +83,76 @@ object GdeltImporter {
              str(parts, 56)
              )
   }
+
+  import CsvImporter.{CsvType, CsvString, CsvNumber}
+
+  val gdeltSchema = Seq[(String, CsvType)](
+                      "EventId"      -> CsvNumber,
+                      "Day"          -> CsvNumber,
+                      "MonthYear"    -> CsvNumber,
+                      "Year"         -> CsvNumber,
+                      "FractionDate" -> CsvNumber,
+
+                      "Actor1Code"   -> CsvString,
+                      "Actor1Name"   -> CsvString,
+                      "Actor1CountryCode" -> CsvString,
+                      "Actor1KnownGroupCode" -> CsvString,
+                      "Actor1EthnicCode" -> CsvString,
+                      "Actor1Religion1Code" -> CsvString,
+                      "Actor1Religion2Code" -> CsvString,
+                      "Actor1Type1Code" -> CsvString,
+                      "Actor1Type2Code" -> CsvString,
+                      "Actor1Type3Code" -> CsvString,
+
+                      "Actor2Code"   -> CsvString,
+                      "Actor2Name"   -> CsvString,
+                      "Actor2CountryCode" -> CsvString,
+                      "Actor2KnownGroupCode" -> CsvString,
+                      "Actor2EthnicCode" -> CsvString,
+                      "Actor2Religion1Code" -> CsvString,
+                      "Actor2Religion2Code" -> CsvString,
+                      "Actor2Type1Code" -> CsvString,
+                      "Actor2Type2Code" -> CsvString,
+                      "Actor2Type3Code" -> CsvString,
+
+                      "IsRootEvent" -> CsvNumber,
+                      "EventCode" -> CsvString,
+                      "EventBaseCode" -> CsvString,
+                      "EventRootCode" -> CsvString,
+                      "QuadClass" -> CsvNumber,
+                      "GoldsteinScale" -> CsvNumber,
+                      "NumMentions" -> CsvNumber,
+                      "NumSources" -> CsvNumber,
+                      "NumArticles" -> CsvNumber,
+                      "AvgTone" -> CsvNumber,
+
+                      "Actor1Geo_Type" -> CsvNumber,
+                      "Actor1Geo_FullName" -> CsvString,
+                      "Actor1Geo_CountryCode" -> CsvString,
+                      "Actor1Geo_ADM1Code" -> CsvString,
+                      "Actor1Geo_Lat" -> CsvNumber,
+                      "Actor1Geo_Long" -> CsvNumber,
+                      "Actor1Geo_FeatureID" -> CsvNumber,
+
+                      "Actor2Geo_Type" -> CsvNumber,
+                      "Actor2Geo_FullName" -> CsvString,
+                      "Actor2Geo_CountryCode" -> CsvString,
+                      "Actor2Geo_ADM1Code" -> CsvString,
+                      "Actor2Geo_Lat" -> CsvNumber,
+                      "Actor2Geo_Long" -> CsvNumber,
+                      "Actor2Geo_FeatureID" -> CsvNumber,
+
+                      "ActionGeo_Type" -> CsvNumber,
+                      "ActionGeo_FullName" -> CsvString,
+                      "ActionGeo_CountryCode" -> CsvString,
+                      "ActionGeo_ADM1Code" -> CsvString,
+                      "ActionGeo_Lat" -> CsvNumber,
+                      "ActionGeo_Long" -> CsvNumber,
+                      "ActionGeo_FeatureID" -> CsvNumber,
+
+                      "DATEADDED" -> CsvString,
+                      "SOURCEURL" -> CsvString
+                    )
+
+  def parseGDeltAsJson(line: String): String = CsvImporter.csvLineToJson(line, gdeltSchema)
 }
