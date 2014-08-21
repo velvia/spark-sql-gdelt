@@ -26,7 +26,7 @@ There are multiple ways of [importing data](http://spark.apache.org/docs/latest/
     - Converting CSV into JSON with proper types is tedious, the only tools I've found (`pip install dataconverters`) that automatically infer types are pretty slow
     - A JSON file in the format described above is 5x the size of the original CSV.  For a 100GB dataset (based on the CSV) this is too much overhead.
 
-* **Parquet** - being column oriented with compression, Parquet files should be smaller than CSV and load faster into Spark too. Converting CSV to Parquet is nontrivial though.
+* **Parquet** - being column oriented with compression, Parquet files should be smaller than CSV and load faster into Spark too. Converting CSV to Parquet is nontrivial though -- the easiest way is to actually use Spark's `saveAsParquetFile` once you use one of the other methods!
 
 * **case classes** - This is the approach this tutorial takes, because we could then directly load CSV files into Spark and parse them into case classes.  The disadvantage is that this code only works for the GDELT dataset.
     - UPDATE: Turns out this is *HORRIBLY* slow in Spark 1.0.2.  Thus the tutorial is now taking the approach of reading in each raw CSV line and converting it to JSON using `parseGDeltAsJson`, then using `jsonRDD`.
@@ -69,9 +69,13 @@ So far, the data has been read into heap by Spark but it is not cached between q
 
     sqlContext.cacheTable("gdelt")
 
-Now, the table will be cached on the next execution and subsequent queries will run out of the cache.  The cache stores the data in an efficient columnar format and will use compression if enabled.
+Now, the table will be cached on the next execution and subsequent queries will
+run out of the cache.  The cache stores the data in an efficient columnar format
+and will use compression if enabled.
 
-Compression seems to help significantly (5x savings when I tried it -- at least compared to uncompressed case classes, which might not be a fair comparison).  To enable it, add this line to your `conf/spark-defaults.conf`:
+Compression seems to help, but not as much as you might expect based on the
+techniques used (dictionary compression, RLE, etc.).  To enable it, add this
+line to your `conf/spark-defaults.conf`:
 
     spark.sql.inMemoryColumnarStorage.compressed true
 
@@ -108,3 +112,39 @@ classes (as of 2.10) only support 22 fields, and we want to represent the
 structure, we use nested case classes.
 
 Access nested fields using a dot notation, for example, `Actor2.Name`.  To see a schema of all the fields, do `gdelt.printSchema`.
+
+### Appending new data
+
+For regular RDD's, you could use `union` or `++` and then run the same
+operations on them, over the combined datasets.  Can this be done with
+SchemaRDDs?  Unfortunately if you use `union` with them, this produces an
+`RDD[Row]` which cannot be queried.
+
+It turns out `unionAll` will produce a `SchemaRDD`, which can be queried, but it takes a long time and doesn't appear to use the cached tables.
+
+## Interesting GDELT queries
+
+## Conclusions (Spark 1.0.2)
+
+* Spark SQL in 1.0.2 is usable as is and offers pretty fast performance - I could query the first 61 million records (1997-2005) between 0.4 and 2.8 seconds on my AWS 8 x c3.xlarge cluster, depending on query complexity (group bys and order by's - did not test joins)
+* `sqlContext` only really works with static data.  Use `hiveContext` if you need INSERT INTO, DDL, etc.
+* Spark SQL vs Shark:
+    - No real choice, since Shark development is stopped
+    - Spark SQL and Catalyst offers huge performance gains
+    - Important things from Shark 0.9 missing in Spark SQL: off-heap/Tachyon compressed columnar caching.  Loading of only hot columns.  Cache write-through.  All of which are important for production performance and resiliency.
+* For prototyping, absolutely use Spark's EC2 scripts.  Easiest way to spin up a cluster with Spark, HDFS, Tachyon.  Spark SQL's HIVE functionality is included.  So is Ganglia!
+* For GDELT, and other big datasets with many columns, case classes is not the way to go in Spark 1.0.2.   Go Parquet or convert to JSON one line at a time.
+* Performance is affected by data skew.  Watch out for .gz files that don't split.
+* Lineage still applies to cached tables.  For example, if an executor OOMs and dies, Spark will recompute the cached table from source (S3 raw CSV files, for example) and re-cache.  This might skew your data.
+
+## Spark SQL TODOs
+
+As of 1.0.2.
+
+* Add support for date columns and geo columns.  Or have a better API than just "binary"... maybe a way to describe what the type actually is.
+* Solve the extreme slowness of hierarchical schemas
+* There is no public API to list the currently cached or registered tables
+* If you register a different RDD with the same name as an existing cached table, there is no error and it just overwrites it.  You are then no longer able to access the original table.
+* Caching a `SchemaRDD` with lots of fields leads to very unwieldy Spark Driver UI display in the storage pane.  This is what my RDD description looks like:
+
+        RDD Storage Info for ExistingRdd [ActionGeo_ADM1Code#198,ActionGeo_CountryCode#199,ActionGeo_FeatureID#200,ActionGeo_FullName#201,ActionGeo_Lat#202,ActionGeo_Long#203,ActionGeo_Type#204,Actor1Code#205,Actor1CountryCode#206,Actor1EthnicCode#207,Actor1Geo_ADM1Code#208,Actor1Geo_CountryCode#209,Actor1Geo_FeatureID#210,Actor1Geo_FullName#211,Actor1Geo_Lat#212,Actor1Geo_Long#213,Actor1Geo_Type#214,Actor1KnownGroupCode#215,Actor1Name#216,Actor1Religion1Code#217,Actor1Religion2Code#218,Actor1Type1Code#219,Actor1Type2Code#220,Actor1Type3Code#221,Actor2Code#222,Actor2CountryCode#223,Actor2EthnicCode#224,Actor2Geo_ADM1Code#225,Actor2Geo_CountryCode#226,Actor2Geo_FeatureID#227,Actor2Geo_FullName#228,Actor2Geo_Lat#229,Actor2Geo_Long#230,Actor2Geo_Type#231,Actor2KnownGroupCode#232,Actor2Name#233,Actor2Religion1Code#234,Actor2Religion2Code#235,Actor2Type1Code#236,Actor2Type2Code#237,Actor2Type3Code#238,AvgTone#239,DATEADDED#240,Day#241,EventBaseCode#242,EventCode#243,EventId#244,EventRootCode#245,FractionDate#246,GoldsteinScale#247,IsRootEvent#248,MonthYear#249,NumArticles#250,NumMentions#251,NumSources#252,QuadClass#253,Year#254], MappedRDD[200]
