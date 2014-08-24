@@ -8,13 +8,16 @@ This experiment is based on Spark 1.0.2 and AWS, but can be easily adapted for o
 
 ## Quick Start
 
-    // convert each CSV line to JSON, use jsonRDD
-    val gdelt = sc.textFile(.....).map(GdeltImporter.parseGDeltRow)
-    gdelt.registerAsTable("gdelt")
+Launch a spark-shell session, with this jar in the `SPARK_CLASSPATH`, then type the following two commands:
 
-    // Alternative, parses each line as case classes.  Warning: very slow!
-    val gdelt = sc.textFile(.....).map(GdeltImporter.parseGDeltAsJson)
-    sqlContext.jsonRDD(gdelt).registerAsTable("gdelt")
+    val sqc = new org.apache.spark.sql.SQLContext(sc)
+    val schemaRdd = GdeltBenchmark.gdeltCsvFile(sqc, "s3n://my-bucket/gdelt_csv/", 1979, 2005)
+
+(substitute the s3n path for the path to your file location)
+
+This loads, converts, and caches the GDELT raw data into a Spark SQL table called "gdelt".  You could then run SQL queries against it:
+
+    sqlContext.sql("select Actor2Code, Actor2Name, Actor2CountryCode, AvgTone from gdelt ORDER BY AvgTone DESC LIMIT 10").collect
 
 ## Importing Data into Spark SQL
 
@@ -137,14 +140,15 @@ It turns out `unionAll` will produce a `SchemaRDD`, which can be queried, but it
 * Performance is affected by data skew.  Watch out for .gz files that don't split.
 * Lineage still applies to cached tables.  For example, if an executor OOMs and dies, Spark will recompute the cached table from source (S3 raw CSV files, for example) and re-cache.  This might skew your data.
 
-## Spark SQL TODOs
+## Spark SQL TODOs/Bugs
 
 As of 1.0.2.
 
 * Add support for date columns and geo columns.  Or have a better API than just "binary"... maybe a way to describe what the type actually is.
-* Solve the extreme slowness of hierarchical schemas
+* Solve the extreme slowness of hierarchical schemas ([spark-users thread](https://mail.google.com/mail/u/2/?hl=en&zx=u2ea54cwvbkj#label/spark-users-list/147f0ee999273415))
 * There is no public API to list the currently cached or registered tables
 * If you register a different RDD with the same name as an existing cached table, there is no error and it just overwrites it.  You are then no longer able to access the original table.
+* Tachyon throws errors reading from Parquet HDFS directory - `java.io.IOException: can not read class parquet.format.FileMetaData: null` - solved in Tachyon 0.6
 * Caching a `SchemaRDD` with lots of fields leads to very unwieldy Spark Driver UI display in the storage pane.  This is what my RDD description looks like:
 
         RDD Storage Info for ExistingRdd [ActionGeo_ADM1Code#198,ActionGeo_CountryCode#199,ActionGeo_FeatureID#200,ActionGeo_FullName#201,ActionGeo_Lat#202,ActionGeo_Long#203,ActionGeo_Type#204,Actor1Code#205,Actor1CountryCode#206,Actor1EthnicCode#207,Actor1Geo_ADM1Code#208,Actor1Geo_CountryCode#209,Actor1Geo_FeatureID#210,Actor1Geo_FullName#211,Actor1Geo_Lat#212,Actor1Geo_Long#213,Actor1Geo_Type#214,Actor1KnownGroupCode#215,Actor1Name#216,Actor1Religion1Code#217,Actor1Religion2Code#218,Actor1Type1Code#219,Actor1Type2Code#220,Actor1Type3Code#221,Actor2Code#222,Actor2CountryCode#223,Actor2EthnicCode#224,Actor2Geo_ADM1Code#225,Actor2Geo_CountryCode#226,Actor2Geo_FeatureID#227,Actor2Geo_FullName#228,Actor2Geo_Lat#229,Actor2Geo_Long#230,Actor2Geo_Type#231,Actor2KnownGroupCode#232,Actor2Name#233,Actor2Religion1Code#234,Actor2Religion2Code#235,Actor2Type1Code#236,Actor2Type2Code#237,Actor2Type3Code#238,AvgTone#239,DATEADDED#240,Day#241,EventBaseCode#242,EventCode#243,EventId#244,EventRootCode#245,FractionDate#246,GoldsteinScale#247,IsRootEvent#248,MonthYear#249,NumArticles#250,NumMentions#251,NumSources#252,QuadClass#253,Year#254], MappedRDD[200]

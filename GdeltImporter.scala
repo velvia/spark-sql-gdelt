@@ -31,13 +31,6 @@ case class GDeltRow(EventId: Int, Day: Int, MonthYear: Int, Year: Int, FractionD
  * }}}
  */
 object GdeltImporter {
-  def time[A](f: => A): A = {
-    val start = System.currentTimeMillis
-    val res = f
-    println("That took " + (System.currentTimeMillis - start) / 1000.0 + " secs.")
-    res
-  }
-
   private def str(row: Array[String], i: Int): String = Try(row(i)).getOrElse("")
   private def int(row: Array[String], i: Int): Int = Try(row(i).toInt).getOrElse(0)
   private def float(row: Array[String], i: Int): Float = Try(row(i).toFloat).getOrElse(0.0F)
